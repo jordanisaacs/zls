@@ -823,20 +823,7 @@ fn generateVersionDataFile(allocator: std.mem.Allocator, version: []const u8, ou
             defer file.close();
             break :blk try file.readToEndAlloc(allocator, std.math.maxInt(usize));
         } else {
-            const url = try std.fmt.allocPrint(allocator, "https://raw.githubusercontent.com/ziglang/zig/{s}/doc/langref.html.in", .{version});
-            defer allocator.free(url);
-            const response = httpGET(allocator, try std.Uri.parse(url)) catch |err| {
-                std.log.err("failed to download {s}: {}", .{ url, err });
-                return error.DownloadFailed;
-            };
-            break :blk switch (response) {
-                .success => |response_bytes| response_bytes,
-                .other => |status| {
-                    const error_name = status.phrase() orelse @tagName(status.class());
-                    std.log.err("failed to download {s}: {s}", .{ url, error_name });
-                    return error.DownloadFailed;
-                },
-            };
+            return error.DownloadFailed;
         }
     };
     defer allocator.free(langref_source);
@@ -938,70 +925,6 @@ const Response = union(enum) {
     success: []const u8,
     other: std.http.Status,
 };
-
-fn httpGET(allocator: std.mem.Allocator, uri: std.Uri) !Response {
-    // TODO remove duplicate logic once https://github.com/ziglang/zig/issues/19071 has been fixed
-    comptime std.debug.assert(zig_builtin.zig_version.order(.{ .major = 0, .minor = 12, .patch = 0 }) == .lt);
-
-    // https://github.com/ziglang/zig/pull/18955
-    const zig_version_at_18955 = comptime std.SemanticVersion.parse("0.12.0-dev.2918+cfce81f7d") catch unreachable;
-    const zig_is_pre_18955 = comptime zig_builtin.zig_version.order(zig_version_at_18955) == .lt;
-    if (zig_is_pre_18955) {
-        var client = std.http.Client{ .allocator = allocator };
-        defer client.deinit();
-        try client.ca_bundle.rescan(allocator);
-
-        if (@hasDecl(std.http.Client, "loadDefaultProxies"))
-            try client.loadDefaultProxies();
-
-        var request = try client.open(.GET, uri, .{ .allocator = allocator }, .{});
-        defer request.deinit();
-
-        try request.send(.{});
-        // try request.finish();
-        try request.wait();
-
-        if (request.response.status.class() != .success) {
-            return .{
-                .other = request.response.status,
-            };
-        }
-
-        return .{
-            .success = try request.reader().readAllAlloc(allocator, std.math.maxInt(usize)),
-        };
-    } else {
-        var arena_allocator = std.heap.ArenaAllocator.init(allocator);
-        defer arena_allocator.deinit();
-
-        var client = std.http.Client{ .allocator = allocator };
-        defer client.deinit();
-        try client.initDefaultProxies(arena_allocator.allocator());
-
-        var server_header_buffer: [1024]u8 = undefined;
-
-        var request = try client.open(
-            .GET,
-            uri,
-            .{ .server_header_buffer = &server_header_buffer },
-        );
-        defer request.deinit();
-
-        try request.send(.{});
-        try request.finish();
-        try request.wait();
-
-        if (request.response.status.class() != .success) {
-            return .{
-                .other = request.response.status,
-            };
-        }
-
-        return .{
-            .success = try request.reader().readAllAlloc(allocator, std.math.maxInt(usize)),
-        };
-    }
-}
 
 pub fn main() !void {
     var general_purpose_allocator = std.heap.GeneralPurposeAllocator(.{}){};
